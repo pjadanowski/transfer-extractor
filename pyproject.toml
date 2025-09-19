@@ -1,0 +1,12 @@
+[project]
+name = "get-transfer"
+version = "0.1.0"
+description = "Application to download and process transfer logs from SSH server"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "paramiko>=3.0.0",
+    "lxml>=4.9.0",
+    "click>=8.0.0",
+    "pyzstd>=0.15.0",
+]
