@@ -67,19 +67,111 @@ class TransferLogProcessor:
         click.echo("SSH connection closed.")
     
     def search_log_files(self, log_dir: str, file_pattern: str, search_string: str) -> List[str]:
-        """Search for log files matching pattern and containing search string."""
+        """Search for log files matching pattern and containing search string using fast server-side commands."""
         try:
             click.echo(f"Searching in directory: {log_dir}")
             click.echo(f"File pattern: {file_pattern}")
             click.echo(f"Search string: {search_string}")
             
-            # List files in the log directory
+            # First, list files matching the pattern using server-side commands
+            stdin, stdout, stderr = self.ssh.exec_command(f"cd {log_dir} && ls -1 | grep -E '{file_pattern}'")
+            file_list_output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            
+            if error:
+                click.echo(f"Warning: {error}")
+            
+            if not file_list_output:
+                click.echo("No files found matching pattern")
+                return []
+            
+            pattern_files = file_list_output.split('\n')
+            click.echo(f"Found {len(pattern_files)} files matching pattern: {pattern_files}")
+            
+            # Use server-side grep to search for the string in all files at once
+            matching_files = []
+            
+            # Build grep commands for different file types
+            regular_files = [f for f in pattern_files if not f.endswith(('.gz', '.zst'))]
+            gz_files = [f for f in pattern_files if f.endswith('.gz')]
+            zst_files = [f for f in pattern_files if f.endswith('.zst')]
+            
+            # Search regular files
+            if regular_files:
+                files_str = ' '.join([f"'{f}'" for f in regular_files])
+                cmd = f"cd {log_dir} && grep -l '{search_string}' {files_str} 2>/dev/null || true"
+                stdin, stdout, stderr = self.ssh.exec_command(cmd)
+                output = stdout.read().decode().strip()
+                if output:
+                    for filename in output.split('\n'):
+                        if filename.strip():
+                            matching_files.append(f"{log_dir}/{filename.strip()}")
+                            click.echo(f"✅ Found string in: {filename.strip()}")
+            
+            # Search gzip files
+            if gz_files:
+                files_str = ' '.join([f"'{f}'" for f in gz_files])
+                cmd = f"cd {log_dir} && zgrep -l '{search_string}' {files_str} 2>/dev/null || true"
+                stdin, stdout, stderr = self.ssh.exec_command(cmd)
+                output = stdout.read().decode().strip()
+                if output:
+                    for filename in output.split('\n'):
+                        if filename.strip():
+                            matching_files.append(f"{log_dir}/{filename.strip()}")
+                            click.echo(f"✅ Found string in: {filename.strip()}")
+            
+            # Search zstd files
+            if zst_files:
+                # Check if zstdgrep is available
+                stdin, stdout, stderr = self.ssh.exec_command("which zstdgrep 2>/dev/null")
+                zstdgrep_available = bool(stdout.read().decode().strip())
+                
+                if zstdgrep_available:
+                    files_str = ' '.join([f"'{f}'" for f in zst_files])
+                    cmd = f"cd {log_dir} && zstdgrep -l '{search_string}' {files_str} 2>/dev/null || true"
+                    stdin, stdout, stderr = self.ssh.exec_command(cmd)
+                    output = stdout.read().decode().strip()
+                    if output:
+                        for filename in output.split('\n'):
+                            if filename.strip():
+                                matching_files.append(f"{log_dir}/{filename.strip()}")
+                                click.echo(f"✅ Found string in: {filename.strip()}")
+                else:
+                    # Fallback: use zstdcat with grep for each file
+                    click.echo("zstdgrep not available, using zstdcat fallback...")
+                    for zst_file in zst_files:
+                        cmd = f"cd {log_dir} && zstdcat '{zst_file}' 2>/dev/null | grep -q '{search_string}' && echo '{zst_file}' || true"
+                        stdin, stdout, stderr = self.ssh.exec_command(cmd)
+                        output = stdout.read().decode().strip()
+                        if output:
+                            matching_files.append(f"{log_dir}/{output}")
+                            click.echo(f"✅ Found string in: {output}")
+            
+            # Report files where string was not found
+            found_basenames = {filename.split('/')[-1] for filename in matching_files}
+            for pattern_file in pattern_files:
+                if pattern_file not in found_basenames:
+                    click.echo(f"❌ String not found in: {pattern_file}")
+            
+            return matching_files
+            
+        except Exception as e:
+            click.echo(f"❌ Error in fast search: {e}")
+            click.echo("Falling back to slow file-by-file search...")
+            return self._search_log_files_fallback(log_dir, file_pattern, search_string)
+    
+    def _search_log_files_fallback(self, log_dir: str, file_pattern: str, search_string: str) -> List[str]:
+        """Fallback method using file-by-file search when fast method fails."""
+        try:
+            click.echo("Using fallback method...")
+            
+            # List files in the log directory using SFTP
             files = self.sftp.listdir(log_dir)
             matching_files = []
             
-            # Filter files by pattern (e.g., jan.log*)
+            # Filter files by pattern
             pattern_files = [f for f in files if re.match(file_pattern, f)]
-            click.echo(f"Found {len(pattern_files)} files matching pattern: {pattern_files}")
+            click.echo(f"Found {len(pattern_files)} files matching pattern")
             
             # Search for the string in matching files
             for filename in pattern_files:
@@ -88,12 +180,12 @@ class TransferLogProcessor:
                     matching_files.append(file_path)
                     click.echo(f"✅ Found string in: {filename}")
                 else:
-                    click.echo(f"❌ String not found in: {filename}\n")
+                    click.echo(f"❌ String not found in: {filename}")
             
             return matching_files
             
         except Exception as e:
-            click.echo(f"❌ Error searching log files: {e}")
+            click.echo(f"❌ Error in fallback search: {e}")
             return []
     
     def _file_contains_string(self, file_path: str, search_string: str) -> bool:
@@ -427,9 +519,13 @@ class TransferLogProcessor:
             click.echo(f"❌ Error formatting XML: {e}")
             # Save raw content as fallback
             try:
-                with open(f"raw_{output_file}", 'w', encoding='utf-8') as file:
+                # Ensure parent directory exists
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+                raw_filename = Path(output_file).parent / f"raw_{Path(output_file).name}"
+                
+                with open(raw_filename, 'w', encoding='utf-8') as file:
                     file.write(xml_content)
-                click.echo(f"⚠️  Saved raw content to: raw_{output_file}")
+                click.echo(f"⚠️  Saved raw content to: {raw_filename}")
                 return True
             except Exception as e2:
                 click.echo(f"❌ Error saving raw content: {e2}")
@@ -527,9 +623,12 @@ def main(hostname, username, key_file, log_dir, alias,
                 click.echo(f"❌ Failed to extract XML from {local_file}")
                 continue
             
-            # Format and save XML
-            output_filename = f"{Path(file_path).stem}_{xml_output}"
-            if processor.format_and_save_xml(xml_content, output_filename):
+            # Format and save XML to extracted folder
+            extracted_dir = Path(output_dir) / "extracted"
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+            
+            output_filename = extracted_dir / f"{Path(file_path).stem}_{xml_output}"
+            if processor.format_and_save_xml(xml_content, str(output_filename)):
                 click.echo(f"✅ Successfully processed {file_path}")
             else:
                 click.echo(f"❌ Failed to save XML from {file_path}")

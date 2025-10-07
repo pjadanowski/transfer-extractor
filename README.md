@@ -76,8 +76,9 @@ python main.py --alias zurich --identity "abc123"
 ## Output
 
 - Downloaded log files are saved to `./downloads/` (or specified directory)
-- Extracted and formatted XML is saved as `extracted_response.xml` (or specified filename)
-- If multiple files are processed, XML files are named with the original log file prefix
+- Extracted and formatted XML files are saved to `./downloads/extracted/` subdirectory
+- XML files are named with the original log file prefix (e.g., `jan.log.1_extracted_response.xml`)
+- If XML formatting fails, raw content is saved with `raw_` prefix
 
 ## Example
 
