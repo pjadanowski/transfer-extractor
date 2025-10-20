@@ -86,7 +86,7 @@ class TransferLogProcessor:
                 return []
             
             pattern_files = file_list_output.split('\n')
-            click.echo(f"Found {len(pattern_files)} files matching pattern: {pattern_files}")
+            click.echo(f"Found {len(pattern_files)} files matching pattern: {pattern_files}\n")
             
             # Use server-side grep to search for the string in all files at once
             matching_files = []
@@ -106,7 +106,7 @@ class TransferLogProcessor:
                     for filename in output.split('\n'):
                         if filename.strip():
                             matching_files.append(f"{log_dir}/{filename.strip()}")
-                            click.echo(f"✅ Found string in: {filename.strip()}")
+                            click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
             
             # Search gzip files
             if gz_files:
@@ -118,7 +118,7 @@ class TransferLogProcessor:
                     for filename in output.split('\n'):
                         if filename.strip():
                             matching_files.append(f"{log_dir}/{filename.strip()}")
-                            click.echo(f"✅ Found string in: {filename.strip()}")
+                            click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
             
             # Search zstd files
             if zst_files:
@@ -135,7 +135,7 @@ class TransferLogProcessor:
                         for filename in output.split('\n'):
                             if filename.strip():
                                 matching_files.append(f"{log_dir}/{filename.strip()}")
-                                click.echo(f"✅ Found string in: {filename.strip()}")
+                                click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
                 else:
                     # Fallback: use zstdcat with grep for each file
                     click.echo("zstdgrep not available, using zstdcat fallback...")
@@ -145,13 +145,13 @@ class TransferLogProcessor:
                         output = stdout.read().decode().strip()
                         if output:
                             matching_files.append(f"{log_dir}/{output}")
-                            click.echo(f"✅ Found string in: {output}")
+                            click.echo(f"✅ Found '{search_string}' in: {output}")
             
             # Report files where string was not found
             found_basenames = {filename.split('/')[-1] for filename in matching_files}
             for pattern_file in pattern_files:
                 if pattern_file not in found_basenames:
-                    click.echo(f"❌ String not found in: {pattern_file}")
+                    click.echo(f"❌ String '{search_string}' not found in: {pattern_file}")
             
             return matching_files
             
@@ -178,9 +178,9 @@ class TransferLogProcessor:
                 file_path = f"{log_dir}/{filename}"
                 if self._file_contains_string(file_path, search_string):
                     matching_files.append(file_path)
-                    click.echo(f"✅ Found string in: {filename}")
+                    click.echo(f"✅ Found '{search_string}' in: {filename}")
                 else:
-                    click.echo(f"❌ String not found in: {filename}")
+                    click.echo(f"❌ String '{search_string}' not found in: {filename}")
             
             return matching_files
             
@@ -384,8 +384,8 @@ class TransferLogProcessor:
             click.echo(f"❌ Error decompressing zstd file: {e}")
             return None
     
-    def extract_second_response_xml(self, file_path: str) -> Optional[str]:
-        """Extract XML from the second line containing 'Response:' in the file."""
+    def extract_second_response_xml(self, file_path: str, identity: str) -> Optional[str]:
+        """Extract XML from the line containing both identity and 'GetShipmentResponse'."""
         try:
             # Try to read the file with different encodings
             content = None
@@ -408,76 +408,80 @@ class TransferLogProcessor:
                     click.echo("❌ Could not decode file with any encoding")
                     return None
             
-            # Split into lines and find lines containing 'Response:'
+            # Split into lines and find lines containing both identity and 'GetShipmentResponse'
             lines = content.split('\n')
-            response_lines = []
+            matching_lines = []
             
             for i, line in enumerate(lines):
-                if 'Response:' in line:
-                    response_lines.append((i+1, line))
+                # Check if line contains both identity and GetShipmentResponse (case insensitive)
+                if identity in line and 'getshipmentresponse' in line.lower():
+                    matching_lines.append((i+1, line))
             
-            if len(response_lines) < 2:
-                click.echo(f"❌ Found only {len(response_lines)} line(s) with 'Response:', need at least 2")
+            if len(matching_lines) == 0:
+                click.echo(f"❌ No lines found with both identity '{identity}' and 'GetShipmentResponse'")
                 return None
             
-            click.echo(f"Found {len(response_lines)} lines with 'Response:'")
+            click.echo(f"Found {len(matching_lines)} line(s) with identity and GetShipmentResponse")
             
-            # Get the second line with 'Response:'
-            second_response_line_num, second_response_line = response_lines[1]
-            click.echo(f"Processing line {second_response_line_num}")
+            # Get the first matching line
+            matching_line_num, matching_line = matching_lines[0]
+            click.echo(f"Processing line {matching_line_num}")
             
-            # Look for XML content in this line - after the log timestamp
-            # XML usually starts with <?xml or directly with <soap: or similar
-            xml_patterns = [
-                r'<\?xml.*?</soap:Envelope>',  # Full XML with SOAP envelope
-                r'<\?xml.*?</soapenv:Envelope>',  # Full XML with soapenv envelope
-                r'<soap:Envelope.*?</soap:Envelope>',  # SOAP envelope without XML declaration
-                r'<soapenv:Envelope.*?</soapenv:Envelope>',  # SOAP envelope with soapenv prefix
-            ]
+            # Look for content between <*:Envelope> ... </*:Envelope> tags
+            # The tag can have different prefixes (soap:, soapenv:, s:, etc.) but must contain "Envelope"
             
-            for pattern in xml_patterns:
-                matches = re.findall(pattern, second_response_line, re.DOTALL)
-                if matches:
-                    # Take the first match
-                    match = matches[0]
-                    if len(match.strip()) > 100:  # Minimum XML content length
-                        click.echo(f"✅ Found XML content ({len(match)} characters)")
-                        return match.strip()
+            # Pattern to match opening tag with "Envelope" in it: <prefix:Envelope ...>
+            envelope_start_pattern = r'<[^>]*Envelope[^>]*>'
+            envelope_start = re.search(envelope_start_pattern, matching_line, re.IGNORECASE)
             
-            # Fallback: try to extract everything between first < and last > in the line
-            start_xml = second_response_line.find('<')
-            if start_xml != -1:
-                xml_part = second_response_line[start_xml:]
-                
-                # Look for the end of the SOAP envelope to avoid extra content
-                soap_end_patterns = [
-                    '</soap:Envelope>',
-                    '</soapenv:Envelope>',
-                    '</Envelope>'
-                ]
-                
-                end_pos = -1
-                for pattern in soap_end_patterns:
-                    pos = xml_part.find(pattern)
-                    if pos != -1:
-                        end_pos = pos + len(pattern)
-                        break
-                
+            if not envelope_start:
+                click.echo("❌ No Envelope opening tag found in the line")
+                return None
+            
+            # Get the starting position
+            start_pos = envelope_start.start()
+            
+            # Extract the prefix from the opening tag (e.g., "soap:", "s:", "soapenv:")
+            opening_tag = envelope_start.group(0)
+            # Try to find the prefix (text before "Envelope" in the tag)
+            prefix_match = re.search(r'<([^:>\s]*:)?Envelope', opening_tag, re.IGNORECASE)
+            if prefix_match and prefix_match.group(1):
+                prefix = prefix_match.group(1)  # e.g., "soap:", "s:"
+            else:
+                prefix = ""  # No prefix, just <Envelope>
+            
+            # Build the closing tag pattern
+            if prefix:
+                closing_tag = f'</{prefix}Envelope>'
+            else:
+                closing_tag = '</Envelope>'
+            
+            click.echo(f"Looking for closing tag: {closing_tag}")
+            
+            # Find the closing tag
+            xml_part = matching_line[start_pos:]
+            end_pos = xml_part.find(closing_tag)
+            
+            if end_pos == -1:
+                # Try case-insensitive search for closing tag
+                end_pos = xml_part.lower().find(closing_tag.lower())
                 if end_pos != -1:
-                    xml_content = xml_part[:end_pos]
+                    # Find the actual closing tag with correct case
+                    actual_closing = xml_part[end_pos:end_pos + len(closing_tag)]
+                    end_pos = end_pos + len(actual_closing)
                 else:
-                    # Fallback to finding last > if no envelope end found
-                    end_xml = xml_part.rfind('>')
-                    if end_xml != -1:
-                        xml_content = xml_part[:end_xml+1]
-                    else:
-                        xml_content = xml_part
-                
-                if len(xml_content) > 100:
-                    click.echo(f"✅ Found XML-like content ({len(xml_content)} characters)")
-                    return xml_content
+                    click.echo(f"❌ Closing tag {closing_tag} not found")
+                    return None
+            else:
+                end_pos = end_pos + len(closing_tag)
             
-            click.echo("❌ No XML content found in second Response line")
+            xml_content = xml_part[:end_pos]
+            
+            if len(xml_content) > 100:
+                click.echo(f"✅ Found Envelope content ({len(xml_content)} characters)")
+                return xml_content.strip()
+            
+            click.echo("❌ Extracted content too short")
             return None
             
         except Exception as e:
@@ -617,8 +621,8 @@ def main(hostname, username, key_file, log_dir, alias,
                 click.echo(f"❌ Failed to download {file_path}")
                 continue
             
-            # Extract XML from second Response
-            xml_content = processor.extract_second_response_xml(local_file)
+            # Extract XML from line containing identity and GetShipmentResponse
+            xml_content = processor.extract_second_response_xml(local_file, identity)
             if not xml_content:
                 click.echo(f"❌ Failed to extract XML from {local_file}")
                 continue

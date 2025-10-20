@@ -7,7 +7,7 @@ A Python application to download and process transfer logs from SSH server, extr
 - 🔐 SSH connection using SSH keys (automatic detection or specify key file)
 - 🔍 Search for log files by alias prefix (e.g., zurich.log.*, axa.log.*)
 - 📥 Download files with automatic decompression (gzip and zstd support)
-- 🎯 Extract XML from the second line containing "Response:" in log files
+- 🎯 Extract XML SOAP Envelope from lines containing both identity and "GetShipmentResponse"
 - ✨ Format and save XML with proper indentation
 - 💻 Easy-to-use command-line interface
 
@@ -70,7 +70,7 @@ python main.py --alias zurich --identity "abc123"
 3. **Content Search**: Checks each matching file for the specified identity string
 4. **Download**: Downloads matching files to local machine
 5. **Decompression**: Automatically decompresses gzipped (.gz) and zstandard (.zst) files
-6. **XML Extraction**: Finds the second line containing "Response:" and extracts clean XML SOAP envelope
+6. **XML Extraction**: Finds the line containing both the identity and "GetShipmentResponse", then extracts the SOAP Envelope from that line
 7. **Formatting**: Formats the XML with proper indentation and saves to file
 
 ## Output
@@ -107,11 +107,12 @@ Found 33 files matching pattern: ['jan.log.13.zst', 'jan.log.8.zst', 'jan.log.7.
 📁 Processing: /var/www/bipro-transfer/current/logs/jan.log.1.zst
 Downloading /var/www/bipro-transfer/current/logs/jan.log.1.zst to downloads/jan.log.1.zst
 ✅ File downloaded and decompressed (zstd): downloads/jan.log.1
-Found 312 lines with 'Response:'
-Processing line 4
-✅ Found XML content (10684 characters)
-✅ Formatted XML saved to: jan.log.1_extracted_response.xml
-✅ Successfully processed /var/www/bipro-transfer/current/logs/jan.log.1.zst
+Found 1 line(s) with identity and GetShipmentResponse
+Processing line 804
+Looking for closing tag: </soap:Envelope>
+✅ Found Envelope content (66630 characters)
+✅ Formatted XML saved to: downloads/extracted/jan.log.21_extracted_response.xml
+✅ Successfully processed /var/www/bipro-transfer/current/logs/jan.log.21.zst
 
 🎉 Processing completed!
 SSH connection closed.
