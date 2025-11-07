@@ -24,6 +24,14 @@ pip install -r requirements.txt
 ## Usage
 
 ### Basic Usage
+
+available Companies and theirs identities [here](./docs/identities_cheatsheet.md)
+
+##### ⭐ recommended
+```bash
+uv run main.py --alias zurich --identity "1235435zvcxvsdf"
+```
+or
 ```bash
 python main.py --alias zurich --identity "1235435zvcxvsdf"
 ```

@@ -14,7 +14,7 @@ cd /var/www/bipro-transfer/current/logs
 
 4. Bei Treffer: Datei auf das lokale System übertragen. Abhängig von der Dateiendung ggf. Archiv entpacken.
 
-5. In der extrahierten Datei nach dem Schlüsselwort "Response" suchen und das zweite Vorkommen identifizieren.
+5. In der extrahierten Datei nach dem Schlüsselwort "GetShipmentResponse" und Identity suchen und das zweite Vorkommen identifizieren.
 
 6. Gefundenen Inhalt in eine separate XML-Ausgabe extrahieren, sauber formatieren und optional als eigenständige Datei abspeichern.
 
