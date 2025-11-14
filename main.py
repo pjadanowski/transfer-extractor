@@ -78,6 +78,14 @@ class TransferLogProcessor:
             self.ssh.close()
         click.echo("SSH connection closed.")
     
+    def _format_bytes(self, size: int) -> str:
+        """Format bytes to human-readable size."""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.2f} {unit}"
+            size /= 1024.0
+        return f"{size:.2f} TB"
+    
     def search_log_files(self, log_dir: str, file_pattern: str, search_string: str) -> List[str]:
         """Search for log files matching pattern and containing search string using fast server-side commands."""
         try:
@@ -109,45 +117,48 @@ class TransferLogProcessor:
             zst_files = [f for f in pattern_files if f.endswith('.zst')]
             
             # Search regular files
-            if regular_files:
+            if regular_files and not matching_files:
                 files_str = ' '.join([f"'{f}'" for f in regular_files])
-                cmd = f"cd {log_dir} && grep -l '{search_string}' {files_str} 2>/dev/null || true"
+                cmd = f"cd {log_dir} && grep -l '{search_string}' {files_str} 2>/dev/null | head -1 || true"
                 stdin, stdout, stderr = self.ssh.exec_command(cmd)
                 output = stdout.read().decode().strip()
                 if output:
-                    for filename in output.split('\n'):
-                        if filename.strip():
-                            matching_files.append(f"{log_dir}/{filename.strip()}")
-                            click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
+                    filename = output.strip()
+                    matching_files.append(f"{log_dir}/{filename}")
+                    click.echo(f"✅ Found '{search_string}' in: {filename}")
+                    click.echo(f"⏩ Stopping search - found match in first file")
+                    return matching_files
             
             # Search gzip files
-            if gz_files:
+            if gz_files and not matching_files:
                 files_str = ' '.join([f"'{f}'" for f in gz_files])
-                cmd = f"cd {log_dir} && zgrep -l '{search_string}' {files_str} 2>/dev/null || true"
+                cmd = f"cd {log_dir} && zgrep -l '{search_string}' {files_str} 2>/dev/null | head -1 || true"
                 stdin, stdout, stderr = self.ssh.exec_command(cmd)
                 output = stdout.read().decode().strip()
                 if output:
-                    for filename in output.split('\n'):
-                        if filename.strip():
-                            matching_files.append(f"{log_dir}/{filename.strip()}")
-                            click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
+                    filename = output.strip()
+                    matching_files.append(f"{log_dir}/{filename}")
+                    click.echo(f"✅ Found '{search_string}' in: {filename}")
+                    click.echo(f"⏩ Stopping search - found match in first file")
+                    return matching_files
             
             # Search zstd files
-            if zst_files:
+            if zst_files and not matching_files:
                 # Check if zstdgrep is available
                 stdin, stdout, stderr = self.ssh.exec_command("which zstdgrep 2>/dev/null")
                 zstdgrep_available = bool(stdout.read().decode().strip())
                 
                 if zstdgrep_available:
                     files_str = ' '.join([f"'{f}'" for f in zst_files])
-                    cmd = f"cd {log_dir} && zstdgrep -l '{search_string}' {files_str} 2>/dev/null || true"
+                    cmd = f"cd {log_dir} && zstdgrep -l '{search_string}' {files_str} 2>/dev/null | head -1 || true"
                     stdin, stdout, stderr = self.ssh.exec_command(cmd)
                     output = stdout.read().decode().strip()
                     if output:
-                        for filename in output.split('\n'):
-                            if filename.strip():
-                                matching_files.append(f"{log_dir}/{filename.strip()}")
-                                click.echo(f"✅ Found '{search_string}' in: {filename.strip()}")
+                        filename = output.strip()
+                        matching_files.append(f"{log_dir}/{filename}")
+                        click.echo(f"✅ Found '{search_string}' in: {filename}")
+                        click.echo(f"⏩ Stopping search - found match in first file")
+                        return matching_files
                 else:
                     # Fallback: use zstdcat with grep for each file
                     click.echo("zstdgrep not available, using zstdcat fallback...")
@@ -158,12 +169,11 @@ class TransferLogProcessor:
                         if output:
                             matching_files.append(f"{log_dir}/{output}")
                             click.echo(f"✅ Found '{search_string}' in: {output}")
+                            click.echo(f"⏩ Stopping search - found match in first file")
+                            return matching_files
             
-            # Report files where string was not found
-            found_basenames = {filename.split('/')[-1] for filename in matching_files}
-            for pattern_file in pattern_files:
-                if pattern_file not in found_basenames:
-                    click.echo(f"❌ String '{search_string}' not found in: {pattern_file}")
+            if not matching_files:
+                click.echo(f"❌ String '{search_string}' not found in any matching files")
             
             return matching_files
             
@@ -185,14 +195,17 @@ class TransferLogProcessor:
             pattern_files = [f for f in files if re.match(file_pattern, f)]
             click.echo(f"Found {len(pattern_files)} files matching pattern")
             
-            # Search for the string in matching files
+            # Search for the string in matching files - stop at first match
             for filename in pattern_files:
                 file_path = f"{log_dir}/{filename}"
                 if self._file_contains_string(file_path, search_string):
                     matching_files.append(file_path)
                     click.echo(f"✅ Found '{search_string}' in: {filename}")
-                else:
-                    click.echo(f"❌ String '{search_string}' not found in: {filename}")
+                    click.echo(f"⏩ Stopping search - found match in first file")
+                    break  # Stop searching after finding first match
+            
+            if not matching_files:
+                click.echo(f"❌ String '{search_string}' not found in any matching files")
             
             return matching_files
             
@@ -309,7 +322,7 @@ class TransferLogProcessor:
             return None
     
     def download_file(self, remote_path: str, local_dir: str = "./downloads") -> Optional[str]:
-        """Download a file from the remote server."""
+        """Download a file from the remote server with progress bar."""
         try:
             # Create local directory if it doesn't exist
             Path(local_dir).mkdir(parents=True, exist_ok=True)
@@ -318,16 +331,27 @@ class TransferLogProcessor:
             filename = Path(remote_path).name
             local_path = Path(local_dir) / filename
             
-            click.echo(f"Downloading {remote_path} to {local_path}")
-            self.sftp.get(remote_path, str(local_path))
+            # Get file size for progress bar
+            file_size = self.sftp.stat(remote_path).st_size
+            
+            click.echo(f"Downloading {remote_path} ({self._format_bytes(file_size)})")
+            
+            # Download with progress bar
+            with click.progressbar(length=file_size, label='Progress') as bar:
+                def callback(transferred, total):
+                    bar.update(transferred - bar.pos)
+                
+                self.sftp.get(remote_path, str(local_path), callback=callback)
             
             # Check if file is compressed and decompress if needed
             if filename.endswith('.gz'):
+                click.echo("Decompressing gzip file...")
                 decompressed_path = self._decompress_gzip_file(str(local_path))
                 if decompressed_path:
                     click.echo(f"✅ File downloaded and decompressed (gzip): {decompressed_path}")
                     return decompressed_path
             elif filename.endswith('.zst'):
+                click.echo("Decompressing zstd file...")
                 decompressed_path = self._decompress_zst_file(str(local_path))
                 if decompressed_path:
                     click.echo(f"✅ File downloaded and decompressed (zstd): {decompressed_path}")
