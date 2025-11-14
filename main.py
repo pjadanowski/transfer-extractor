@@ -37,11 +37,23 @@ class TransferLogProcessor:
             
             if self.key_filename and Path(self.key_filename).exists():
                 click.echo(f"Connecting to {self.hostname} using key file: {self.key_filename}")
-                self.ssh.connect(
-                    hostname=self.hostname,
-                    username=self.username,
-                    key_filename=self.key_filename
-                )
+                
+                # Try to connect without password first
+                try:
+                    self.ssh.connect(
+                        hostname=self.hostname,
+                        username=self.username,
+                        key_filename=self.key_filename
+                    )
+                except paramiko.ssh_exception.PasswordRequiredException:
+                    # Key is encrypted, ask for passphrase
+                    passphrase = click.prompt("🔑 SSH key is encrypted. Enter passphrase", hide_input=True, type=str)
+                    self.ssh.connect(
+                        hostname=self.hostname,
+                        username=self.username,
+                        key_filename=self.key_filename,
+                        passphrase=passphrase
+                    )
             else:
                 click.echo(f"Connecting to {self.hostname} using default SSH keys...")
                 self.ssh.connect(
