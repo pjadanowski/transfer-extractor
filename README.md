@@ -38,6 +38,17 @@ python main.py --alias zurich --identity "1235435zvcxvsdf"
 
 ### Advanced Usage
 ```bash
+# Using uv run
+uv run python main.py \
+  --hostname transfer01.live.bipro.demv.systems \
+  --username developer \
+  --log-dir /var/www/bipro-transfer/current/logs \
+  --alias zurich \
+  --identity "1235435zvcxvsdf" \
+  --output-dir ./downloads \
+  --xml-output extracted_response.xml
+
+# Or with direct python
 python main.py \
   --hostname transfer01.live.bipro.demv.systems \
   --username developer \
@@ -50,7 +61,13 @@ python main.py \
 
 ### Using SSH Key Authentication
 ```bash
-# With specific SSH key
+# With specific SSH key (using uv)
+uv run python main.py \
+  --key-file ~/.ssh/id_rsa \
+  --alias axa \
+  --identity "your-identity-string"
+
+# Or with direct python
 python main.py \
   --key-file ~/.ssh/id_rsa \
   --alias axa \
